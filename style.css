@@ -1,0 +1,321 @@
+:root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #1c1b1a;
+    --ink-soft: #55504a;
+    --ink-faint: #8a8580;
+    --accent: #c15f3c;
+    --accent-ink: #ffffff;
+    --accent-soft: #fbe9e1;
+    --line: #ece7e0;
+    --insight-bg: #fbf4e9;
+    --insight-line: #e8d9b8;
+    --max-w: 720px;
+    --radius: 14px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Georgia", "Noto Serif", "Times New Roman", serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+    max-width: var(--max-w);
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+/* Header */
+
+.site-header {
+    border-bottom: 1px solid var(--line);
+    padding: 22px 0;
+    margin-bottom: 8px;
+}
+
+.site-header .wrap {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.logo {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-weight: 800;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.logo span {
+    color: var(--accent);
+}
+
+.tagline {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+}
+
+/* Home page article list */
+
+.hero {
+    padding: 40px 0 8px;
+}
+
+.hero h1 {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 1.9rem;
+    line-height: 1.25;
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+}
+
+.hero p {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink-soft);
+    font-size: 1.02rem;
+    margin: 0;
+}
+
+.post-list {
+    padding: 28px 0 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.post-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 24px;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.post-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+}
+
+.post-card .post-date {
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+}
+
+.post-card h2 {
+    font-family: "Georgia", "Noto Serif", serif;
+    font-size: 1.35rem;
+    margin: 0 0 8px;
+    color: var(--ink);
+}
+
+.post-card .post-excerpt {
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    margin: 0 0 10px;
+}
+
+.post-card .read-more {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+/* Article page */
+
+.breadcrumb {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.85rem;
+    margin: 24px 0 0;
+}
+
+.breadcrumb a {
+    color: var(--ink-faint);
+    text-decoration: none;
+}
+
+.breadcrumb a:hover {
+    color: var(--accent);
+}
+
+article.post {
+    padding-bottom: 72px;
+}
+
+.post-header {
+    padding: 18px 0 28px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 28px;
+}
+
+.post-meta {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.post-header h1 {
+    font-size: 2rem;
+    line-height: 1.22;
+    margin: 0 0 14px;
+    letter-spacing: -0.01em;
+}
+
+.post-lede {
+    font-size: 1.1rem;
+    color: var(--ink-soft);
+    margin: 0;
+}
+
+.callout {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0;
+    padding: 14px 18px;
+    font-size: 0.95rem;
+    margin: 24px 0;
+}
+
+h2 {
+    font-size: 1.4rem;
+    margin: 42px 0 14px;
+    letter-spacing: -0.01em;
+}
+
+p {
+    margin: 0 0 16px;
+    font-size: 1.05rem;
+}
+
+ul.check-list {
+    list-style: none;
+    margin: 0 0 16px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+ul.check-list li {
+    padding-left: 30px;
+    position: relative;
+    font-size: 1.03rem;
+}
+
+ul.check-list li::before {
+    content: "✔";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    color: var(--accent);
+    font-size: 0.9rem;
+}
+
+.insight {
+    background: var(--insight-bg);
+    border: 1px solid var(--insight-line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin: 28px 0;
+}
+
+.insight-label {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: 10px;
+    display: block;
+}
+
+.insight p:last-child {
+    margin-bottom: 0;
+}
+
+a {
+    color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+}
+
+a:hover {
+    text-decoration-thickness: 2px;
+}
+
+.source-list {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    margin: 0;
+    padding-left: 18px;
+}
+
+.source-list li {
+    margin-bottom: 4px;
+}
+
+.cta {
+    margin-top: 44px;
+    padding: 24px;
+    background: var(--ink);
+    color: #fff;
+    border-radius: var(--radius);
+}
+
+.cta p {
+    margin: 0;
+    font-size: 1.08rem;
+    color: #fff;
+}
+
+/* Footer */
+
+.site-footer {
+    border-top: 1px solid var(--line);
+    padding: 26px 0 40px;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+}
+
+@media (max-width: 600px) {
+    .hero h1 {
+        font-size: 1.55rem;
+    }
+    .post-header h1 {
+        font-size: 1.6rem;
+    }
+    .post-card, .insight {
+        padding: 18px;
+    }
+}
