@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "rooms": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('players/X').val() === auth.uid && !newData.child('players/O').exists()) || (data.exists() && newData.exists() && newData.child('players/X').val() === data.child('players/X').val() && (!data.child('players/O').exists() || newData.child('players/O').val() === data.child('players/O').val()) && (data.child('players/X').val() === auth.uid || data.child('players/O').val() === auth.uid || (!data.child('players/O').exists() && newData.child('players/O').val() === auth.uid))))",
+        ".validate": "$code.matches(/^[A-HJ-NP-Z2-9]{4}$/) && newData.hasChildren(['players', 'board', 'turn'])",
+        "board": { ".validate": "newData.isString() && newData.val().matches(/^[-XO]{9}$/)" },
+        "turn": { ".validate": "newData.val() === 'X' || newData.val() === 'O'" }
+      }
+    }
+  }
+}

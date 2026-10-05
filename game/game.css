@@ -1,0 +1,220 @@
+/* Game page — builds on ../style.css tokens */
+
+.game {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding-top: 20px;
+    padding-bottom: 60px;
+    max-width: 440px;
+}
+
+.game h1 {
+    font-size: 1.6rem;
+    line-height: 1.25;
+    margin: 8px 0 10px;
+    letter-spacing: -0.01em;
+}
+
+.game .hint {
+    color: var(--ink-soft);
+    font-size: 1rem;
+    margin-bottom: 24px;
+}
+
+.status {
+    min-height: 1.6em;
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0 0 16px;
+    text-align: center;
+}
+
+.status.error {
+    color: #b3261e;
+}
+
+.btn {
+    font: inherit;
+    font-weight: 600;
+    font-size: 1rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    border-radius: 12px;
+    padding: 14px 20px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.btn:active {
+    transform: scale(0.98);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    width: 100%;
+    font-size: 1.1rem;
+    padding: 16px 20px;
+}
+
+.btn-small {
+    padding: 8px 14px;
+    font-size: 0.9rem;
+}
+
+.join {
+    margin-top: 32px;
+}
+
+.join label {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    margin-bottom: 8px;
+}
+
+.join-row {
+    display: flex;
+    gap: 10px;
+}
+
+.join-row input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+}
+
+.join-row input:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Room */
+
+.room-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.room-label {
+    display: block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-faint);
+}
+
+.room-code {
+    font-size: 1.5rem;
+    letter-spacing: 0.15em;
+}
+
+.players {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.player {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.player.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.player .score {
+    margin-left: auto;
+    color: var(--ink);
+    font-size: 1.05rem;
+}
+
+.mark {
+    font-weight: 800;
+}
+
+.mark-X {
+    color: var(--accent);
+}
+
+.mark-O {
+    color: #2f6f8f;
+}
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    aspect-ratio: 1;
+    margin-bottom: 20px;
+}
+
+.cell {
+    font: inherit;
+    font-size: clamp(2.4rem, 16vw, 4.2rem);
+    font-weight: 800;
+    line-height: 1;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.cell:disabled {
+    cursor: default;
+}
+
+.cell.X {
+    color: var(--accent);
+}
+
+.cell.O {
+    color: #2f6f8f;
+}
+
+.cell.win {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+}
+
+.leave {
+    display: block;
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.9rem;
+    color: var(--ink-faint);
+}
