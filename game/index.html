@@ -2,8 +2,8 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
-<title>Хрестики-нулики на двох — HRme</title>
-<meta name="description" content="Гра на двох з різних телефонів: створіть кімнату й надішліть посилання.">
+<title>Кіт і Лис — гра на двох</title>
+<meta name="description" content="Гра на двох з різних телефонів: кіт і лис гуляють полянкою.">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#faf9f7">
 <link rel="stylesheet" href="../style.css">
@@ -24,8 +24,8 @@
 
     <!-- Start screen -->
     <section id="lobby" hidden>
-        <h1>Хрестики-нулики на двох</h1>
-        <p class="hint">Створіть кімнату й надішліть посилання другові — він відкриє його на своєму телефоні.</p>
+        <h1>Кіт і Лис</h1>
+        <p class="hint">Гра на двох з різних телефонів. Створіть кімнату, оберіть героя й надішліть посилання другові.</p>
         <button class="btn btn-primary" id="create">Створити гру</button>
 
         <form class="join" id="join-form" autocomplete="off">
@@ -37,28 +37,50 @@
         </form>
     </section>
 
-    <!-- Room screen -->
-    <section id="room" hidden>
+    <!-- Character choice -->
+    <section id="pick" hidden>
+        <h1>Ким ти будеш?</h1>
+        <p class="hint">Друг, який приєднається, гратиме за іншого героя.</p>
+        <div class="chars">
+            <button class="char-card" data-role="cat" type="button">
+                <canvas width="20" height="20" data-preview="cat"></canvas>
+                <span>Кіт</span>
+            </button>
+            <button class="char-card" data-role="fox" type="button">
+                <canvas width="20" height="20" data-preview="fox"></canvas>
+                <span>Лис</span>
+            </button>
+        </div>
+        <a class="leave" href="./">Назад</a>
+    </section>
+
+    <!-- Waiting for the second player -->
+    <section id="waiting" hidden>
         <div class="room-bar">
             <div>
                 <span class="room-label">Кімната</span>
-                <strong class="room-code" id="room-code"></strong>
+                <strong class="room-code" data-room-code></strong>
             </div>
-            <button class="btn btn-small" id="share">Надіслати посилання</button>
+            <button class="btn btn-small" data-share>Надіслати посилання</button>
         </div>
-
-        <div class="players">
-            <div class="player" id="player-X"><span class="mark mark-X">✕</span> <span class="who"></span> <b class="score"></b></div>
-            <div class="player" id="player-O"><span class="mark mark-O">◯</span> <span class="who"></span> <b class="score"></b></div>
+        <div class="waiting-hero">
+            <canvas width="20" height="20" id="waiting-preview"></canvas>
+            <p id="waiting-text"></p>
         </div>
-
-        <div class="board" id="board" role="grid" aria-label="Ігрове поле"></div>
-
-        <button class="btn btn-primary" id="rematch" hidden>Зіграти ще раз</button>
         <a class="leave" href="./">Вийти з кімнати</a>
     </section>
 
 </main>
+
+<!-- The meadow -->
+<section id="play" hidden>
+    <canvas id="stage"></canvas>
+    <div class="hud">
+        <div class="pill" id="hud-status"></div>
+        <a class="pill pill-btn" href="./" aria-label="Вийти з гри">✕</a>
+    </div>
+    <div class="touch-hint" id="touch-hint">Тягни пальцем по екрану, щоб іти</div>
+</section>
 
 <script type="module" src="game.js"></script>
 </body>

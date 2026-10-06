@@ -3,6 +3,8 @@ import { getAuth, signInAnonymously, onAuthStateChanged, connectAuthEmulator } f
 import {
     getDatabase, ref, onValue, runTransaction, set, onDisconnect, connectDatabaseEmulator
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
+import { buildCharacterSprites, frameIndex, OUTLINE } from "./sprites.js";
+import { buildWorld, moveWithCollisions, SPAWN, WORLD_W, WORLD_H } from "./world.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyDyQ3Vda1dd-lCsPSZ0Cnb8qZHEQrZ9pH8",
@@ -27,44 +29,25 @@ if (location.hostname === "localhost" && new URLSearchParams(location.search).ha
 // Room codes avoid look-alike characters (0/O, 1/I).
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_RE = /^[A-HJ-NP-Z2-9]{4}$/;
-const EMPTY_BOARD = "---------";
-const LINES = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6]
-];
-const MARKS = { X: "✕", O: "◯" };
+const ROLES = ["cat", "fox"];
+const NAME = { cat: "Кіт", fox: "Лис" };
+const other = (role) => (role === "cat" ? "fox" : "cat");
+
+const SPEED = 64; // world pixels per second
+const SEND_EVERY = 100; // ms between position updates
+const JOY_RADIUS = 46; // CSS px
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
-const boardEl = $("board");
+const sprites = buildCharacterSprites();
 
 let uid = null;
 let code = null;
 let roomRef = null;
 let room = null;
+let myRole = null; // "cat" | "fox" | null (spectator)
+let joining = false;
 let presenceStarted = false;
-
-// ---------- Game rules ----------
-
-function findWin(board) {
-    for (const line of LINES) {
-        const [a, b, c] = line;
-        if (board[a] !== "-" && board[a] === board[b] && board[a] === board[c]) {
-            return { winner: board[a], line };
-        }
-    }
-    return board.includes("-") ? null : { winner: "draw", line: [] };
-}
-
-function mySymbol(r) {
-    if (!r || !r.players) return null;
-    if (r.players.X === uid) return "X";
-    if (r.players.O === uid) return "O";
-    return null;
-}
-
-const other = (sym) => (sym === "X" ? "O" : "X");
 
 // ---------- UI helpers ----------
 
@@ -86,12 +69,22 @@ function showError(err) {
 }
 
 function show(section) {
-    $("lobby").hidden = section !== "lobby";
-    $("room").hidden = section !== "room";
+    for (const id of ["lobby", "pick", "waiting", "play"]) $(id).hidden = id !== section;
+    document.body.classList.toggle("playing", section === "play");
 }
 
-function roomUrl() {
-    return location.origin + location.pathname + "#" + code;
+// Little looping walk animation for previews outside the meadow.
+function animatePreview(canvas, role) {
+    const ctx = canvas.getContext("2d");
+    const step = (t) => {
+        if (!canvas.isConnected) return;
+        if (canvas.offsetParent !== null) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(sprites[role].down[frameIndex(true, t / 1000)], 2, 2);
+        }
+        requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
 }
 
 // ---------- Lobby ----------
@@ -101,8 +94,12 @@ function randomCode() {
     return Array.from(bytes, (b) => CODE_CHARS[b % CODE_CHARS.length]).join("");
 }
 
-async function createRoom() {
-    $("create").disabled = true;
+function startPos(role) {
+    return { x: SPAWN[role].x, y: SPAWN[role].y, d: "down", m: false };
+}
+
+async function createRoom(role) {
+    document.querySelectorAll(".char-card").forEach((b) => { b.disabled = true; });
     setStatus("Створюємо кімнату…");
     try {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -111,11 +108,8 @@ async function createRoom() {
                 if (current !== null) return; // code taken — abort and try another
                 return {
                     createdAt: Date.now(),
-                    players: { X: uid },
-                    board: EMPTY_BOARD,
-                    turn: "X",
-                    round: 0,
-                    score: { X: 0, O: 0 }
+                    players: { [role]: uid },
+                    pos: { [role]: startPos(role) }
                 };
             });
             if (result.committed) {
@@ -128,60 +122,70 @@ async function createRoom() {
     } catch (err) {
         showError(err);
     } finally {
-        $("create").disabled = false;
+        document.querySelectorAll(".char-card").forEach((b) => { b.disabled = false; });
     }
-}
-
-function showLobby() {
-    show("lobby");
-    setStatus("");
 }
 
 // ---------- Room ----------
 
+function roleOf(r) {
+    if (!r || !r.players) return null;
+    return ROLES.find((role) => r.players[role] === uid) || null;
+}
+
 function enterRoom(roomCode) {
     code = roomCode;
     roomRef = ref(db, "rooms/" + code);
-    $("room-code").textContent = code;
-    show("room");
+    document.querySelectorAll("[data-room-code]").forEach((el) => { el.textContent = code; });
     setStatus("Завантаження…");
-    buildBoard();
 
     let firstSnapshot = true;
     onValue(roomRef, (snap) => {
         room = snap.val();
         if (firstSnapshot) {
             firstSnapshot = false;
-            if (!room) {
+            if (!room || !room.players) {
+                show("lobby");
                 setStatus("Кімнату " + code + " не знайдено. Перевірте код.", true);
                 return;
             }
-            if (mySymbol(room)) startPresence(mySymbol(room));
-            else if (!room.players.O) joinRoom();
+            myRole = roleOf(room);
+            if (myRole) {
+                startPresence(myRole);
+            } else {
+                const freeRole = ROLES.find((role) => !room.players[role]);
+                if (freeRole) joinRoom(freeRole);
+            }
         }
-        render();
+        if (room) update();
     }, showError);
 }
 
-async function joinRoom() {
+async function joinRoom(role) {
+    joining = true;
     try {
-        const result = await runTransaction(roomRef, (r) => {
-            if (!r || !r.players || r.players.O || r.players.X === uid) return;
-            r.players.O = uid;
-            return r;
+        const result = await runTransaction(ref(db, "rooms/" + code + "/players/" + role), (current) => {
+            if (current !== null) return; // somebody was faster
+            return uid;
         });
-        // Only after the server has accepted us as a player may we mark ourselves online.
-        if (result.committed && mySymbol(result.snapshot.val())) startPresence(mySymbol(result.snapshot.val()));
+        if (!result.committed) return;
+        myRole = role;
+        // Only after the server has accepted us as a player may we write our position and presence.
+        await set(ref(db, "rooms/" + code + "/pos/" + role), startPos(role));
+        startPresence(role);
     } catch (err) {
         showError(err);
+    } finally {
+        joining = false;
+        if (room) update();
     }
 }
 
 // Marks this player online while the page is open; Firebase clears it on disconnect.
-function startPresence(sym) {
+function startPresence(role) {
     if (presenceStarted) return;
     presenceStarted = true;
-    const meOnline = ref(db, "rooms/" + code + "/online/" + sym);
+    const meOnline = ref(db, "rooms/" + code + "/online/" + role);
     onValue(ref(db, ".info/connected"), async (snap) => {
         if (snap.val() !== true) return;
         try {
@@ -193,50 +197,33 @@ function startPresence(sym) {
     });
 }
 
-async function play(index) {
-    try {
-        await runTransaction(roomRef, (r) => {
-            const sym = mySymbol(r);
-            if (!sym || !r.players.O || r.winner || r.turn !== sym || r.board[index] !== "-") return;
-            r.board = r.board.slice(0, index) + sym + r.board.slice(index + 1);
-            const result = findWin(r.board);
-            if (result) {
-                r.winner = result.winner;
-                if (result.winner !== "draw") {
-                    r.score = r.score || { X: 0, O: 0 };
-                    r.score[result.winner] = (r.score[result.winner] || 0) + 1;
-                }
-            } else {
-                r.turn = other(sym);
-            }
-            return r;
-        });
-    } catch (err) {
-        showError(err);
+// Decides which screen to show after every change in the room.
+function update() {
+    if (joining) {
+        setStatus("Приєднуємося…");
+        return;
     }
-}
+    const players = room.players || {};
+    const bothJoined = Boolean(players.cat && players.fox);
 
-async function rematch() {
-    try {
-        await runTransaction(roomRef, (r) => {
-            if (!r || !r.winner || !mySymbol(r)) return;
-            r.round = (r.round || 0) + 1;
-            r.board = EMPTY_BOARD;
-            r.turn = r.round % 2 ? "O" : "X"; // players take turns going first
-            r.winner = null;
-            return r;
-        });
-    } catch (err) {
-        showError(err);
+    if (myRole && !bothJoined) {
+        show("waiting");
+        setStatus("");
+        $("waiting-text").textContent = "Ти — " + NAME[myRole] + ". Надішли посилання другу — він гратиме за " +
+            (myRole === "cat" ? "Лиса" : "Кота") + ".";
+        return;
     }
+    if (!myRole && !bothJoined) return;
+    if (!game) startGame();
+    game.sync();
 }
 
 async function share() {
-    const url = roomUrl();
-    const btn = $("share");
+    const url = location.origin + location.pathname + "#" + code;
+    const btn = document.querySelector("[data-share]");
     if (navigator.share) {
         try {
-            await navigator.share({ title: "Хрестики-нулики", text: "Зіграймо! Код кімнати: " + code, url });
+            await navigator.share({ title: "Кіт і Лис", text: "Пограймо разом! Код кімнати: " + code, url });
         } catch (err) {
             if (err.name !== "AbortError") console.error(err);
         }
@@ -251,81 +238,261 @@ async function share() {
     }
 }
 
-// ---------- Rendering ----------
+// ---------- The meadow ----------
 
-function buildBoard() {
-    boardEl.innerHTML = "";
-    for (let i = 0; i < 9; i++) {
-        const cell = document.createElement("button");
-        cell.className = "cell";
-        cell.type = "button";
-        cell.setAttribute("role", "gridcell");
-        cell.addEventListener("click", () => play(i));
-        boardEl.appendChild(cell);
-    }
-}
+let game = null;
 
-function render() {
-    if (!room) return;
-    const me = mySymbol(room);
-    const opp = me && other(me);
-    const players = room.players || {};
-    const online = room.online || {};
-    const score = room.score || {};
-    const board = room.board || EMPTY_BOARD;
-    const ready = Boolean(players.O);
-    const win = room.winner ? findWin(board) : null;
+function startGame() {
+    show("play");
+    setStatus("");
+    const canvas = $("stage");
+    const ctx = canvas.getContext("2d");
+    const world = buildWorld();
+    const posRef = myRole && ref(db, "rooms/" + code + "/pos/" + myRole);
 
-    for (const sym of ["X", "O"]) {
-        const el = $("player-" + sym);
-        let who;
-        if (!players[sym]) who = "чекаємо…";
-        else if (sym === me) who = "Ви";
-        else who = me ? "Суперник" : "Гравець";
-        if (players[sym] && sym !== me && !online[sym]) who += " (офлайн)";
-        el.querySelector(".who").textContent = who;
-        el.querySelector(".score").textContent = score[sym] || 0;
-        el.classList.toggle("active", ready && !room.winner && room.turn === sym);
+    // Every character: shown position (x, y) and, for remote ones, the target from the network.
+    const chars = {};
+    for (const role of ROLES) {
+        const p = (room.pos && room.pos[role]) || startPos(role);
+        chars[role] = { role, x: p.x, y: p.y, tx: p.x, ty: p.y, d: p.d || "down", m: false, t: 0 };
     }
 
-    const cells = boardEl.children;
-    for (let i = 0; i < 9; i++) {
-        const v = board[i];
-        const cell = cells[i];
-        cell.textContent = v === "-" ? "" : MARKS[v];
-        cell.className = "cell" + (v === "-" ? "" : " " + v) + (win && win.line.includes(i) ? " win" : "");
-        cell.disabled = !(me && ready && !room.winner && room.turn === me && v === "-");
-        cell.setAttribute("aria-label", "Клітинка " + (i + 1) + (v === "-" ? ", порожня" : ", " + MARKS[v]));
+    const keys = new Set();
+    const joy = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0 };
+    let lastSent = 0;
+    let sentState = "";
+    let last = performance.now();
+    let hintShown = true;
+
+    // ----- input -----
+    const KEYMAP = {
+        ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+        ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right"
+    };
+    window.addEventListener("keydown", (e) => {
+        if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); }
+    });
+    window.addEventListener("keyup", (e) => { keys.delete(KEYMAP[e.code]); });
+    window.addEventListener("blur", () => keys.clear());
+
+    canvas.addEventListener("pointerdown", (e) => {
+        if (joy.active) return;
+        canvas.setPointerCapture(e.pointerId);
+        Object.assign(joy, { active: true, id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY });
+    });
+    canvas.addEventListener("pointermove", (e) => {
+        if (joy.active && e.pointerId === joy.id) { joy.x = e.clientX; joy.y = e.clientY; }
+    });
+    const release = (e) => { if (e.pointerId === joy.id) joy.active = false; };
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", release);
+
+    function inputVector() {
+        let vx = 0;
+        let vy = 0;
+        if (keys.has("left")) vx -= 1;
+        if (keys.has("right")) vx += 1;
+        if (keys.has("up")) vy -= 1;
+        if (keys.has("down")) vy += 1;
+        if (joy.active) {
+            vx = (joy.x - joy.ox) / JOY_RADIUS;
+            vy = (joy.y - joy.oy) / JOY_RADIUS;
+        }
+        const len = Math.hypot(vx, vy);
+        if (len < 0.2) return { vx: 0, vy: 0 };
+        return len > 1 ? { vx: vx / len, vy: vy / len } : { vx, vy };
     }
 
-    $("rematch").hidden = !(room.winner && me);
-
-    let text;
-    if (!me) {
-        text = room.winner ? resultText(room.winner, null) : "Кімната зайнята — ви дивитеся гру.";
-    } else if (!ready) {
-        text = "Надішліть посилання другу — чекаємо на нього.";
-    } else if (room.winner) {
-        text = resultText(room.winner, me);
-    } else if (room.turn === me) {
-        text = "Ваш хід (" + MARKS[me] + ")";
-    } else {
-        text = online[opp] ? "Хід суперника…" : "Суперник не в мережі — чекаємо…";
+    // ----- network -----
+    function sync() {
+        for (const role of ROLES) {
+            if (role === myRole) continue;
+            const p = room.pos && room.pos[role];
+            if (!p) continue;
+            const c = chars[role];
+            c.tx = p.x;
+            c.ty = p.y;
+            c.d = p.d || c.d;
+            c.m = Boolean(p.m);
+        }
+        const players = room.players || {};
+        const online = room.online || {};
+        let text = "Кімната " + code;
+        if (myRole) {
+            const friend = other(myRole);
+            text += " · " + (online[friend] ? NAME[friend] + " поруч" : NAME[friend] + " не в мережі");
+        } else if (players.cat && players.fox) {
+            text += " · ти глядач";
+        }
+        $("hud-status").textContent = text;
     }
-    setStatus(text);
-}
 
-function resultText(winner, me) {
-    if (winner === "draw") return "Нічия!";
-    if (!me) return "Переміг " + MARKS[winner];
-    return winner === me ? "Ви виграли! 🎉" : "Суперник виграв.";
+    function send(now) {
+        if (!myRole) return;
+        const me = chars[myRole];
+        const state = { x: Math.round(me.x), y: Math.round(me.y), d: me.d, m: me.m };
+        const key = state.x + "," + state.y + "," + state.d + "," + state.m;
+        if (key === sentState) return;
+        const stoppedNow = !state.m && sentState.endsWith("true");
+        if (!stoppedNow && now - lastSent < SEND_EVERY) return;
+        sentState = key;
+        lastSent = now;
+        set(posRef, state).catch(console.error);
+    }
+
+    // ----- simulation -----
+    function tick(now) {
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+
+        if (myRole) {
+            const me = chars[myRole];
+            const { vx, vy } = inputVector();
+            me.m = vx !== 0 || vy !== 0;
+            if (me.m) {
+                const next = moveWithCollisions(world, me.x, me.y, vx * SPEED * dt, vy * SPEED * dt);
+                me.x = next.x;
+                me.y = next.y;
+                me.d = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? "right" : "left") : (vy > 0 ? "down" : "up");
+                if (hintShown) {
+                    hintShown = false;
+                    $("touch-hint").classList.add("gone");
+                }
+            }
+            send(now);
+        }
+        for (const role of ROLES) {
+            const c = chars[role];
+            if (role !== myRole) {
+                const dist = Math.hypot(c.tx - c.x, c.ty - c.y);
+                if (dist > 80) {
+                    c.x = c.tx;
+                    c.y = c.ty;
+                } else {
+                    const k = 1 - Math.exp(-dt * 12);
+                    c.x += (c.tx - c.x) * k;
+                    c.y += (c.ty - c.y) * k;
+                }
+            }
+            c.t += dt;
+        }
+        draw(now);
+        requestAnimationFrame(tick);
+    }
+
+    // ----- rendering -----
+    function draw(now) {
+        const dpr = window.devicePixelRatio || 1;
+        const cw = Math.round(canvas.clientWidth * dpr);
+        const ch = Math.round(canvas.clientHeight * dpr);
+        if (canvas.width !== cw || canvas.height !== ch) {
+            canvas.width = cw;
+            canvas.height = ch;
+        }
+        // Whole-number zoom keeps the pixels crisp; the short side shows about 10 tiles.
+        const scale = Math.max(1, Math.round(Math.min(cw, ch) / 170));
+        const viewW = cw / scale;
+        const viewH = ch / scale;
+
+        const focus = myRole
+            ? chars[myRole]
+            : { x: (chars.cat.x + chars.fox.x) / 2, y: (chars.cat.y + chars.fox.y) / 2 };
+        const cam = (center, view, size) =>
+            size <= view ? Math.round((size - view) / 2) : Math.round(Math.min(Math.max(center - view / 2, 0), size - view));
+        const camX = cam(focus.x, viewW, WORLD_W);
+        const camY = cam(focus.y - 8, viewH, WORLD_H);
+
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = "#2f6b2c";
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(scale, 0, 0, scale, -camX * scale, -camY * scale);
+        ctx.drawImage(world.ground, 0, 0);
+
+        // Draw props and characters from back to front so trees can hide whoever walks behind them.
+        const players = room.players || {};
+        const online = room.online || {};
+        const visibleChars = ROLES.filter((role) => players[role]).map((role) => chars[role]);
+        const items = world.props
+            .filter((p) => p.x < camX + viewW && p.x + p.img.width > camX && p.y < camY + viewH && p.y + p.img.height > camY)
+            .concat(visibleChars.map((c) => ({ char: c, base: c.y })));
+        items.sort((a, b) => a.base - b.base);
+
+        for (const item of items) {
+            if (!item.char) {
+                ctx.drawImage(item.img, item.x, item.y);
+                continue;
+            }
+            const c = item.char;
+            const x = Math.round(c.x);
+            const y = Math.round(c.y);
+            ctx.globalAlpha = c.role === myRole || online[c.role] ? 1 : 0.5;
+            ctx.fillStyle = "rgba(20, 40, 10, 0.3)";
+            ctx.fillRect(x - 5, y - 1, 10, 2);
+            ctx.fillRect(x - 4, y - 2, 8, 4);
+            ctx.drawImage(sprites[c.role][c.d][frameIndex(c.m, c.t)], x - 8, y - 15);
+            ctx.globalAlpha = 1;
+        }
+
+        // A small bouncing arrow above "me".
+        if (myRole) {
+            const me = chars[myRole];
+            const x = Math.round(me.x);
+            const y = Math.round(me.y) - 21 + (Math.floor(now / 300) % 2);
+            ctx.fillStyle = OUTLINE;
+            ctx.fillRect(x - 3, y - 1, 7, 1);
+            ctx.fillRect(x - 3, y, 7, 2);
+            ctx.fillRect(x - 2, y + 2, 5, 1);
+            ctx.fillRect(x - 1, y + 3, 3, 1);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(x - 2, y, 5, 1);
+            ctx.fillRect(x - 1, y + 1, 3, 1);
+            ctx.fillRect(x, y + 2, 1, 1);
+        }
+
+        // Touch joystick
+        if (joy.active) {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const r = JOY_RADIUS;
+            let kx = joy.x - joy.ox;
+            let ky = joy.y - joy.oy;
+            const len = Math.hypot(kx, ky);
+            if (len > r) { kx = (kx / len) * r; ky = (ky / len) * r; }
+            const rect = canvas.getBoundingClientRect();
+            const ox = joy.ox - rect.left;
+            const oy = joy.oy - rect.top;
+            ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(ox, oy, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+            ctx.beginPath();
+            ctx.arc(ox + kx, oy + ky, r * 0.45, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    if (!myRole) $("touch-hint").hidden = true;
+    else if (!matchMedia("(pointer: coarse)").matches) $("touch-hint").textContent = "Ходи стрілками або WASD";
+
+    game = { sync };
+    requestAnimationFrame(tick);
 }
 
 // ---------- Start ----------
 
-$("create").addEventListener("click", createRoom);
-$("rematch").addEventListener("click", rematch);
-$("share").addEventListener("click", share);
+$("create").addEventListener("click", () => {
+    show("pick");
+    setStatus("");
+});
+document.querySelectorAll(".char-card").forEach((btn) => {
+    btn.addEventListener("click", () => createRoom(btn.dataset.role));
+});
+document.querySelectorAll("[data-preview]").forEach((c) => animatePreview(c, c.dataset.preview));
+document.querySelectorAll("[data-share]").forEach((b) => b.addEventListener("click", share));
 $("join-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const value = $("join-code").value.trim().toUpperCase();
@@ -339,13 +506,26 @@ $("join-form").addEventListener("submit", (e) => {
 // Back button or an edited link with another code: start fresh.
 window.addEventListener("popstate", () => location.reload());
 
+let waitingPreviewStarted = false;
+const waitingObserver = new MutationObserver(() => {
+    if (!waitingPreviewStarted && myRole && !$("waiting").hidden) {
+        waitingPreviewStarted = true;
+        animatePreview($("waiting-preview"), myRole);
+    }
+});
+waitingObserver.observe($("waiting"), { attributes: true, attributeFilter: ["hidden"] });
+
 onAuthStateChanged(auth, (user) => {
     if (!user) return;
     if (uid) return; // already started
     uid = user.uid;
     const hashCode = location.hash.slice(1).toUpperCase();
-    if (CODE_RE.test(hashCode)) enterRoom(hashCode);
-    else showLobby();
+    if (CODE_RE.test(hashCode)) {
+        enterRoom(hashCode);
+    } else {
+        show("lobby");
+        setStatus("");
+    }
 });
 
 signInAnonymously(auth).catch(showError);
