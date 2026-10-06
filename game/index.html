@@ -76,10 +76,26 @@
 <section id="play" hidden>
     <canvas id="stage"></canvas>
     <div class="hud">
-        <div class="pill" id="hud-status"></div>
-        <a class="pill pill-btn" href="./" aria-label="Вийти з гри">✕</a>
+        <div class="pill score" aria-label="Рахунок">
+            <img id="icon-cat" alt="Кіт"><b id="score-cat">0</b><span class="sep">:</span><b id="score-fox">0</b><img id="icon-fox" alt="Лис">
+            <span class="goal">до 5</span>
+        </div>
+        <div class="hud-right">
+            <div class="pill" id="hud-status" hidden></div>
+            <a class="pill pill-btn" href="./" aria-label="Вийти з гри">✕</a>
+        </div>
     </div>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div class="touch-hint" id="touch-hint">Тягни пальцем по екрану, щоб іти</div>
+    <div class="stealth" id="stealth" hidden></div>
+    <div class="win" id="win" hidden>
+        <div class="win-card">
+            <canvas id="win-sprite" width="20" height="20"></canvas>
+            <h2 id="win-title"></h2>
+            <p id="win-score"></p>
+            <button class="btn btn-primary" id="again" type="button">Грати ще раз</button>
+        </div>
+    </div>
 </section>
 
 <script type="module" src="game.js"></script>

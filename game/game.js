@@ -3,8 +3,9 @@ import { getAuth, signInAnonymously, onAuthStateChanged, connectAuthEmulator } f
 import {
     getDatabase, ref, onValue, runTransaction, set, onDisconnect, connectDatabaseEmulator
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
-import { buildCharacterSprites, frameIndex, OUTLINE } from "./sprites.js";
-import { buildWorld, moveWithCollisions, SPAWN, WORLD_W, WORLD_H } from "./world.js";
+import { buildCharacterSprites, buildMouseSprites, frameIndex, OUTLINE } from "./sprites.js";
+import { buildWorld, moveWithCollisions, inCover, SPAWN, WORLD_W, WORLD_H } from "./world.js";
+import { MouseSim, ALIVE, WIN_SCORE, AMBUSH_MS, CATCH_DIST } from "./mouse.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyDyQ3Vda1dd-lCsPSZ0Cnb8qZHEQrZ9pH8",
@@ -21,7 +22,8 @@ const auth = getAuth(app);
 const db = getDatabase(app);
 
 // Local testing against the Firebase emulators: open http://localhost:…/game/?emulator
-if (location.hostname === "localhost" && new URLSearchParams(location.search).has("emulator")) {
+const TESTING = location.hostname === "localhost" && new URLSearchParams(location.search).has("emulator");
+if (TESTING) {
     connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
     connectDatabaseEmulator(db, "localhost", 9000);
 }
@@ -242,20 +244,60 @@ async function share() {
 
 let game = null;
 
+function headIcon(role) {
+    const c = document.createElement("canvas");
+    c.width = 16;
+    c.height = 12;
+    c.getContext("2d").drawImage(sprites[role].down[0], 0, -1);
+    return c.toDataURL();
+}
+
+let toastTimer = null;
+function showToast(text, ms = 2200) {
+    const el = $("toast");
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
 function startGame() {
     show("play");
     setStatus("");
     const canvas = $("stage");
     const ctx = canvas.getContext("2d");
     const world = buildWorld();
-    const posRef = myRole && ref(db, "rooms/" + code + "/pos/" + myRole);
+    const mouseSprites = buildMouseSprites();
+    const base = "rooms/" + code;
+    const posRef = myRole && ref(db, base + "/pos/" + myRole);
+    const mouseRef = ref(db, base + "/game/mouse");
+
+    let serverOffset = 0;
+    onValue(ref(db, ".info/serverTimeOffset"), (snap) => { serverOffset = snap.val() || 0; });
+    const serverNow = () => Date.now() + serverOffset;
 
     // Every character: shown position (x, y) and, for remote ones, the target from the network.
     const chars = {};
     for (const role of ROLES) {
         const p = (room.pos && room.pos[role]) || startPos(role);
-        chars[role] = { role, x: p.x, y: p.y, tx: p.x, ty: p.y, d: p.d || "down", m: false, t: 0 };
+        chars[role] = { role, x: p.x, y: p.y, tx: p.x, ty: p.y, d: p.d || "down", m: false, h: false, t: 0 };
     }
+
+    // Hiding: standing next to a bush or a tree, plus a few seconds after stepping out.
+    let myCover = false;
+    let lastCover = -Infinity; // performance.now() of the last moment in cover
+
+    // The mouse as this device shows it.
+    const mouse = { id: 0, x: 0, y: 0, tx: 0, ty: 0, d: "down", s: "gone", since: 0, t: 0 };
+    let sim = null; // MouseSim when this device runs the mouse
+    let simSent = "";
+    let simLastSent = 0;
+    let mound = null; // little pile of earth where a mouse dug in: { x, y, at }
+    const claimed = new Set();
+    const effects = []; // catch puffs and "+1" texts
+    let round = -1;
+    let knownCatches = null;
+    let oldMice = 0; // mice from before the current round can't be caught any more
 
     const keys = new Set();
     const joy = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0 };
@@ -263,6 +305,27 @@ function startGame() {
     let sentState = "";
     let last = performance.now();
     let hintShown = true;
+
+    $("icon-cat").src = headIcon("cat");
+    $("icon-fox").src = headIcon("fox");
+
+    // ----- game data helpers -----
+    const gameData = () => room.game || {};
+    const catchesOf = (r) => (gameData().catches || {})[r] || {};
+    function score() {
+        const s = { cat: 0, fox: 0 };
+        for (const role of Object.values(catchesOf(round))) if (role in s) s[role] += 1;
+        return s;
+    }
+    function winner() {
+        const s = score();
+        return ROLES.find((role) => s[role] >= WIN_SCORE) || null;
+    }
+    // The cat's device runs the mouse; if the cat is offline, the fox's does.
+    function simulatorRole() {
+        const online = room.online || {};
+        return online.cat ? "cat" : online.fox ? "fox" : null;
+    }
 
     // ----- input -----
     const KEYMAP = {
@@ -287,6 +350,11 @@ function startGame() {
     canvas.addEventListener("pointerup", release);
     canvas.addEventListener("pointercancel", release);
 
+    $("again").addEventListener("click", () => {
+        const r = round;
+        runTransaction(ref(db, base + "/game/round"), (cur) => ((cur || 0) === r ? r + 1 : undefined)).catch(showError);
+    });
+
     function inputVector() {
         let vx = 0;
         let vy = 0;
@@ -303,8 +371,33 @@ function startGame() {
         return len > 1 ? { vx: vx / len, vy: vy / len } : { vx, vy };
     }
 
+    // ----- mouse display -----
+    function showMouseState(s, id) {
+        if (id !== mouse.id) {
+            mouse.id = id;
+            if (s === "out" || s === "graze" || s === "eat") showToast("З'явилась мишка! 🐭", 1800);
+        }
+        if (s === mouse.s) return;
+        if (s === "gone" && mouse.s === "burrow") mound = { x: mouse.x, y: mouse.y, at: performance.now() };
+        mouse.s = s;
+        mouse.since = performance.now();
+    }
+
+    function onCatch(id, role) {
+        const at = performance.now();
+        if (id === mouse.id) {
+            effects.push({ x: mouse.x, y: mouse.y - 4, at, role });
+            mouse.s = "gone";
+        }
+        if (role === myRole) showToast("Ти спіймав мишку! +1", 1800);
+        else showToast(NAME[role] + " спіймав мишку!", 1800);
+    }
+
     // ----- network -----
     function sync() {
+        const players = room.players || {};
+        const online = room.online || {};
+
         for (const role of ROLES) {
             if (role === myRole) continue;
             const p = room.pos && room.pos[role];
@@ -314,36 +407,108 @@ function startGame() {
             c.ty = p.y;
             c.d = p.d || c.d;
             c.m = Boolean(p.m);
+            c.h = Boolean(p.h);
         }
-        const players = room.players || {};
-        const online = room.online || {};
-        let text = "Кімната " + code;
-        if (myRole) {
-            const friend = other(myRole);
-            text += " · " + (online[friend] ? NAME[friend] + " поруч" : NAME[friend] + " не в мережі");
-        } else if (players.cat && players.fox) {
-            text += " · ти глядач";
+
+        // New round: clear the score and the overlay.
+        const r = gameData().round || 0;
+        if (r !== round) {
+            round = r;
+            oldMice = mouse.id;
+            claimed.clear();
+            knownCatches = null;
+            if (sim) sim.reset(serverNow());
         }
-        $("hud-status").textContent = text;
+
+        // Catches that happened since the last update.
+        const caught = catchesOf(round);
+        if (knownCatches) {
+            for (const key of Object.keys(caught)) if (!(key in knownCatches)) onCatch(Number(key.slice(1)), caught[key]);
+        }
+        knownCatches = { ...caught };
+
+        // Who runs the mouse.
+        const amSim = myRole && simulatorRole() === myRole;
+        if (amSim && !sim) {
+            const nm = gameData().mouse;
+            sim = new MouseSim(world, nm || { next: serverNow() + 3000 });
+        } else if (!amSim && sim) {
+            sim = null;
+        }
+        if (sim && caught["m" + sim.m.id] && ALIVE.has(sim.m.s)) sim.caught(serverNow());
+
+        // Mouse from the network (when another device runs it).
+        const nm = gameData().mouse;
+        if (!sim && nm) {
+            if (nm.id !== mouse.id || Math.hypot(nm.x - mouse.x, nm.y - mouse.y) > 40) {
+                mouse.x = nm.x;
+                mouse.y = nm.y;
+            }
+            mouse.tx = nm.x;
+            mouse.ty = nm.y;
+            mouse.d = nm.d;
+            showMouseState(caught["m" + nm.id] ? "gone" : nm.s, nm.id);
+        }
+
+        // HUD
+        const s = score();
+        $("score-cat").textContent = s.cat;
+        $("score-fox").textContent = s.fox;
+        const status = $("hud-status");
+        if (myRole && !online[other(myRole)]) {
+            status.textContent = NAME[other(myRole)] + " не в мережі";
+            status.hidden = false;
+        } else if (!myRole) {
+            status.textContent = "Ти глядач";
+            status.hidden = false;
+        } else {
+            status.hidden = true;
+        }
+
+        const win = winner();
+        $("win").hidden = !win;
+        if (win) {
+            $("win-title").textContent = win === myRole ? "Ти переміг! 🎉" : NAME[win] + " переміг!";
+            $("win-score").textContent = "Кіт " + s.cat + " : " + s.fox + " Лис";
+            $("again").hidden = !myRole;
+            const wctx = $("win-sprite").getContext("2d");
+            wctx.clearRect(0, 0, 20, 20);
+            wctx.drawImage(sprites[win].down[0], 2, 2);
+        }
     }
 
-    function send(now) {
+    function sendPosition(now, hidden) {
         if (!myRole) return;
         const me = chars[myRole];
-        const state = { x: Math.round(me.x), y: Math.round(me.y), d: me.d, m: me.m };
-        const key = state.x + "," + state.y + "," + state.d + "," + state.m;
+        const state = { x: Math.round(me.x), y: Math.round(me.y), d: me.d, m: me.m, h: hidden };
+        const key = JSON.stringify(state);
         if (key === sentState) return;
-        const stoppedNow = !state.m && sentState.endsWith("true");
-        if (!stoppedNow && now - lastSent < SEND_EVERY) return;
+        const changedFlags = !sentState || JSON.parse(sentState).m !== state.m || JSON.parse(sentState).h !== state.h;
+        if (!changedFlags && now - lastSent < SEND_EVERY) return;
         sentState = key;
         lastSent = now;
         set(posRef, state).catch(console.error);
     }
 
+    function sendMouse(now) {
+        const st = sim.state();
+        const key = JSON.stringify(st);
+        if (key === simSent) return;
+        const stateChanged = !simSent || JSON.parse(simSent).s !== st.s;
+        if (!stateChanged && now - simLastSent < SEND_EVERY) return;
+        simSent = key;
+        simLastSent = now;
+        set(mouseRef, st).catch(console.error);
+    }
+
     // ----- simulation -----
     function tick(now) {
-        const dt = Math.min(0.05, (now - last) / 1000);
+        // The first animation frame can be stamped slightly before `last`.
+        const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
         last = now;
+        const players = room.players || {};
+        const online = room.online || {};
+        let myHidden = false;
 
         if (myRole) {
             const me = chars[myRole];
@@ -359,28 +524,143 @@ function startGame() {
                     $("touch-hint").classList.add("gone");
                 }
             }
-            send(now);
+            myCover = inCover(world, me.x, me.y);
+            if (myCover) lastCover = now;
+            myHidden = now - lastCover < AMBUSH_MS;
+            me.h = myHidden;
+            sendPosition(now, myHidden);
+
+            const stealth = $("stealth");
+            if (myHidden && hintShown) {
+                hintShown = false;
+                $("touch-hint").classList.add("gone");
+            }
+            if (myCover) {
+                stealth.textContent = "🌿 Ти в укритті — мишка тебе не бачить";
+                stealth.hidden = false;
+            } else if (myHidden) {
+                stealth.textContent = "🐾 Засідка: ще " + ((AMBUSH_MS - (now - lastCover)) / 1000).toFixed(1) + " с";
+                stealth.hidden = false;
+            } else {
+                stealth.hidden = true;
+            }
         }
+
         for (const role of ROLES) {
             const c = chars[role];
-            if (role !== myRole) {
-                const dist = Math.hypot(c.tx - c.x, c.ty - c.y);
-                if (dist > 80) {
-                    c.x = c.tx;
-                    c.y = c.ty;
-                } else {
-                    const k = 1 - Math.exp(-dt * 12);
-                    c.x += (c.tx - c.x) * k;
-                    c.y += (c.ty - c.y) * k;
-                }
-            }
+            if (role !== myRole) follow(c, dt, 80);
             c.t += dt;
         }
+
+        // The mouse
+        if (sim) {
+            const seen = ROLES
+                .filter((role) => players[role] && (role === myRole || online[role]))
+                .map((role) => role === myRole
+                    ? { x: chars[role].x, y: chars[role].y, hidden: myHidden }
+                    : { x: chars[role].tx, y: chars[role].ty, hidden: chars[role].h });
+            sim.step(dt, serverNow(), seen, Boolean(winner()));
+            mouse.x = sim.m.x;
+            mouse.y = sim.m.y;
+            mouse.d = sim.m.d;
+            showMouseState(sim.m.s, sim.m.id);
+            sendMouse(now);
+        } else {
+            follow(mouse, dt, 40);
+        }
+        mouse.t += dt;
+
+        // Catching: just bump into the mouse.
+        if (myRole && ALIVE.has(mouse.s) && mouse.id > oldMice && !winner() && !claimed.has(mouse.id)) {
+            const me = chars[myRole];
+            if (Math.hypot(me.x - mouse.x, me.y - mouse.y) < CATCH_DIST) {
+                const id = mouse.id;
+                claimed.add(id);
+                runTransaction(ref(db, base + "/game/catches/" + round + "/m" + id), (cur) => (cur === null ? myRole : undefined))
+                    .catch(console.error);
+            }
+        }
+
         draw(now);
         requestAnimationFrame(tick);
     }
 
+    function follow(c, dt, snap) {
+        const dist = Math.hypot(c.tx - c.x, c.ty - c.y);
+        if (dist > snap) {
+            c.x = c.tx;
+            c.y = c.ty;
+        } else {
+            const k = 1 - Math.exp(-dt * 12);
+            c.x += (c.tx - c.x) * k;
+            c.y += (c.ty - c.y) * k;
+        }
+    }
+
     // ----- rendering -----
+    function drawMouse(now) {
+        const x = Math.round(mouse.x);
+        const y = Math.round(mouse.y);
+        const dir = mouse.d || "down";
+        if (mouse.s === "burrow") {
+            const p = Math.min(1, (now - mouse.since) / 800);
+            drawHole(x, y);
+            const sink = Math.round(p * 9);
+            if (sink < 10) {
+                const spr = mouseSprites[dir][Math.floor(now / 80) % 2 + 1];
+                ctx.drawImage(spr, 0, 0, 13, 10 - sink, x - 6, y - 8 + sink, 13, 10 - sink);
+            }
+            // flying bits of earth
+            ctx.fillStyle = "#7a5432";
+            for (let i = 0; i < 4; i++) {
+                const a = (i / 4) * Math.PI * 2 + now / 200;
+                ctx.fillRect(x + Math.round(Math.cos(a) * 6 * p), y - 2 - Math.round(Math.abs(Math.sin(a)) * 5 * p), 1, 1);
+            }
+            return;
+        }
+        ctx.fillStyle = "rgba(20, 40, 10, 0.3)";
+        ctx.fillRect(x - 3, y - 1, 7, 2);
+        let frame = 0;
+        let bob = 0;
+        if (mouse.s === "eat") bob = Math.floor(now / 220) % 2;
+        if (mouse.s === "graze" || mouse.s === "out") frame = frameIndex(true, mouse.t);
+        if (mouse.s === "flee") frame = frameIndex(true, mouse.t * 2);
+        ctx.drawImage(mouseSprites[dir][frame], x - 6, y - 8 + bob);
+        if (mouse.s === "flee" && now - mouse.since < 900 && Math.floor(now / 120) % 2 === 0) {
+            // "!" — the mouse noticed someone
+            ctx.fillStyle = OUTLINE;
+            ctx.fillRect(x - 1, y - 19, 3, 8);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(x, y - 18, 1, 4);
+            ctx.fillRect(x, y - 13, 1, 1);
+        }
+    }
+
+    function drawHole(x, y) {
+        ctx.fillStyle = OUTLINE;
+        ctx.fillRect(x - 4, y - 2, 9, 3);
+        ctx.fillRect(x - 3, y - 3, 7, 5);
+        ctx.fillStyle = "#4a3220";
+        ctx.fillRect(x - 3, y - 2, 7, 3);
+    }
+
+    function drawMound(now) {
+        if (!mound) return;
+        const age = now - mound.at;
+        if (age > 3000) { mound = null; return; }
+        const x = Math.round(mound.x);
+        const y = Math.round(mound.y);
+        ctx.globalAlpha = Math.min(1, (3000 - age) / 600);
+        ctx.fillStyle = OUTLINE;
+        ctx.fillRect(x - 4, y - 3, 9, 4);
+        ctx.fillRect(x - 3, y - 4, 7, 1);
+        ctx.fillStyle = "#8a6038";
+        ctx.fillRect(x - 3, y - 3, 7, 3);
+        ctx.fillStyle = "#a87a4a";
+        ctx.fillRect(x - 2, y - 3, 3, 1);
+        ctx.globalAlpha = 1;
+    }
+
     function draw(now) {
         const dpr = window.devicePixelRatio || 1;
         const cw = Math.round(canvas.clientWidth * dpr);
@@ -408,6 +688,7 @@ function startGame() {
         ctx.imageSmoothingEnabled = false;
         ctx.setTransform(scale, 0, 0, scale, -camX * scale, -camY * scale);
         ctx.drawImage(world.ground, 0, 0);
+        drawMound(now);
 
         // Draw props and characters from back to front so trees can hide whoever walks behind them.
         const players = room.players || {};
@@ -416,9 +697,14 @@ function startGame() {
         const items = world.props
             .filter((p) => p.x < camX + viewW && p.x + p.img.width > camX && p.y < camY + viewH && p.y + p.img.height > camY)
             .concat(visibleChars.map((c) => ({ char: c, base: c.y })));
+        if (ALIVE.has(mouse.s) || mouse.s === "burrow") items.push({ mouse: true, base: mouse.y });
         items.sort((a, b) => a.base - b.base);
 
         for (const item of items) {
+            if (item.mouse) {
+                drawMouse(now);
+                continue;
+            }
             if (!item.char) {
                 ctx.drawImage(item.img, item.x, item.y);
                 continue;
@@ -426,7 +712,10 @@ function startGame() {
             const c = item.char;
             const x = Math.round(c.x);
             const y = Math.round(c.y);
-            ctx.globalAlpha = c.role === myRole || online[c.role] ? 1 : 0.5;
+            let alpha = 1;
+            if (c.role !== myRole && !online[c.role]) alpha = 0.4;
+            else if (c.role === myRole ? myCover : c.h) alpha = 0.6;
+            ctx.globalAlpha = alpha;
             ctx.fillStyle = "rgba(20, 40, 10, 0.3)";
             ctx.fillRect(x - 5, y - 1, 10, 2);
             ctx.fillRect(x - 4, y - 2, 8, 4);
@@ -434,7 +723,22 @@ function startGame() {
             ctx.globalAlpha = 1;
         }
 
-        // A small bouncing arrow above "me".
+        // Catch puffs
+        for (let i = effects.length - 1; i >= 0; i--) {
+            const e = effects[i];
+            const age = (now - e.at) / 1000;
+            if (age > 1.2) { effects.splice(i, 1); continue; }
+            if (age < 0.5) {
+                ctx.fillStyle = "#ffffff";
+                for (let k = 0; k < 8; k++) {
+                    const a = (k / 8) * Math.PI * 2;
+                    const r = 3 + age * 22;
+                    ctx.fillRect(Math.round(e.x + Math.cos(a) * r), Math.round(e.y + Math.sin(a) * r * 0.7), 2, 2);
+                }
+            }
+        }
+
+        // A small bouncing arrow above "me", and the ambush timer under it.
         if (myRole) {
             const me = chars[myRole];
             const x = Math.round(me.x);
@@ -448,11 +752,78 @@ function startGame() {
             ctx.fillRect(x - 2, y, 5, 1);
             ctx.fillRect(x - 1, y + 1, 3, 1);
             ctx.fillRect(x, y + 2, 1, 1);
+            if (me.h) {
+                const left = myCover ? 1 : Math.max(0, 1 - (now - lastCover) / AMBUSH_MS);
+                const by = Math.round(me.y) - 26;
+                ctx.fillStyle = OUTLINE;
+                ctx.fillRect(x - 7, by, 15, 3);
+                ctx.fillStyle = "#7cc451";
+                ctx.fillRect(x - 6, by + 1, Math.round(13 * left), 1);
+            }
+        }
+
+        // Screen-space overlays
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const cssW = cw / dpr;
+        const cssH = ch / dpr;
+        const toScreen = (wx, wy) => ({ x: ((wx - camX) * scale) / dpr, y: ((wy - camY) * scale) / dpr });
+
+        ctx.textAlign = "center";
+        ctx.font = "800 18px system-ui, sans-serif";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = OUTLINE;
+        for (const e of effects) {
+            const age = (now - e.at) / 1000;
+            const p = toScreen(e.x, e.y);
+            ctx.globalAlpha = Math.max(0, 1 - age / 1.2);
+            ctx.strokeText("+1", p.x, p.y - 18 - age * 30);
+            ctx.fillStyle = e.role === "fox" ? "#ffb072" : "#e3e6f0";
+            ctx.fillText("+1", p.x, p.y - 18 - age * 30);
+        }
+        ctx.globalAlpha = 1;
+
+        // Where is the mouse? An arrow at the screen edge when it's out of view.
+        if (ALIVE.has(mouse.s)) {
+            const m = toScreen(mouse.x, mouse.y - 4);
+            const margin = 30;
+            if (m.x < 0 || m.y < 0 || m.x > cssW || m.y > cssH) {
+                const cx = cssW / 2;
+                const cy = cssH / 2;
+                let dx = m.x - cx;
+                let dy = m.y - cy;
+                const len = Math.hypot(dx, dy) || 1;
+                dx /= len;
+                dy /= len;
+                const top = 84;
+                const tx = dx > 0 ? (cssW - margin - cx) / dx : dx < 0 ? (margin - cx) / dx : Infinity;
+                const ty = dy > 0 ? (cssH - margin - cy) / dy : dy < 0 ? (top - cy) / dy : Infinity;
+                const t = Math.min(tx, ty);
+                const px = cx + dx * t;
+                const py = cy + dy * t;
+                const r = 16;
+                // pointer
+                ctx.fillStyle = "#ffffff";
+                ctx.strokeStyle = OUTLINE;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(px + dx * (r + 10), py + dy * (r + 10));
+                ctx.lineTo(px + dx * r - dy * 7, py + dy * r + dx * 7);
+                ctx.lineTo(px + dx * r + dy * 7, py + dy * r - dx * 7);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                // badge with the mouse face
+                ctx.beginPath();
+                ctx.arc(px, py, r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(mouseSprites.down[0], 0, 0, 13, 9, px - 13, py - 10, 26, 18);
+            }
         }
 
         // Touch joystick
         if (joy.active) {
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             const r = JOY_RADIUS;
             let kx = joy.x - joy.ox;
             let ky = joy.y - joy.oy;
@@ -479,6 +850,17 @@ function startGame() {
     else if (!matchMedia("(pointer: coarse)").matches) $("touch-hint").textContent = "Ходи стрілками або WASD";
 
     game = { sync };
+    if (myRole) showToast("Лови мишок! Ховайся біля кущів і дерев — звідти мишка тебе не бачить. Хто перший спіймає 5, той переміг.", 7000);
+    if (TESTING) {
+        // Hooks for automated tests only.
+        window.__game = {
+            chars, mouse,
+            get sim() { return sim; },
+            teleport(x, y) { Object.assign(chars[myRole], { x, y }); },
+            ambush() { lastCover = performance.now(); }
+        };
+    }
+    sync();
     requestAnimationFrame(tick);
 }
 

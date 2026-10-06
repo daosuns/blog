@@ -5,7 +5,9 @@
         ".read": "auth != null",
         ".write": "auth != null && !data.exists() && ((newData.child('players/cat').val() === auth.uid && !newData.child('players/fox').exists()) || (newData.child('players/fox').val() === auth.uid && !newData.child('players/cat').exists()))",
         ".validate": "$code.matches(/^[A-HJ-NP-Z2-9]{4}$/) && newData.hasChildren(['createdAt', 'players'])",
-        "createdAt": { ".validate": "newData.isNumber()" },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
         "players": {
           "$role": {
             ".write": "auth != null && data.parent().exists() && !data.exists() && newData.val() === auth.uid && (($role === 'cat' && data.parent().child('fox').val() !== auth.uid) || ($role === 'fox' && data.parent().child('cat').val() !== auth.uid))",
@@ -16,11 +18,24 @@
           "$role": {
             ".write": "auth != null && root.child('rooms').child($code).child('players').child($role).val() === auth.uid",
             ".validate": "newData.hasChildren(['x', 'y', 'd', 'm'])",
-            "x": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 640" },
-            "y": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 480" },
-            "d": { ".validate": "newData.isString() && newData.val().matches(/^(up|down|left|right)$/)" },
-            "m": { ".validate": "newData.isBoolean()" },
-            "$other": { ".validate": false }
+            "x": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 640"
+            },
+            "y": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 480"
+            },
+            "d": {
+              ".validate": "newData.isString() && newData.val().matches(/^(up|down|left|right)$/)"
+            },
+            "m": {
+              ".validate": "newData.isBoolean()"
+            },
+            "h": {
+              ".validate": "newData.isBoolean()"
+            },
+            "$other": {
+              ".validate": false
+            }
           }
         },
         "online": {
@@ -29,7 +44,51 @@
             ".validate": "newData.isBoolean()"
           }
         },
-        "$other": { ".validate": false }
+        "game": {
+          "round": {
+            ".write": "auth != null && (root.child('rooms').child($code).child('players/cat').val() === auth.uid || root.child('rooms').child($code).child('players/fox').val() === auth.uid)",
+            ".validate": "newData.isNumber() && ((!data.exists() && newData.val() === 1) || newData.val() === data.val() + 1)"
+          },
+          "mouse": {
+            ".write": "auth != null && (root.child('rooms').child($code).child('players/cat').val() === auth.uid || root.child('rooms').child($code).child('players/fox').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['id', 'x', 'y', 'd', 's', 'next'])",
+            "id": {
+              ".validate": "newData.isNumber()"
+            },
+            "x": {
+              ".validate": "newData.isNumber()"
+            },
+            "y": {
+              ".validate": "newData.isNumber()"
+            },
+            "next": {
+              ".validate": "newData.isNumber()"
+            },
+            "d": {
+              ".validate": "newData.isString() && newData.val().matches(/^(up|down|left|right)$/)"
+            },
+            "s": {
+              ".validate": "newData.isString() && newData.val().matches(/^(out|graze|eat|flee|burrow|gone)$/)"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "catches": {
+            "$round": {
+              "$id": {
+                ".write": "auth != null && !data.exists() && ((newData.val() === 'cat' && root.child('rooms').child($code).child('players/cat').val() === auth.uid) || (newData.val() === 'fox' && root.child('rooms').child($code).child('players/fox').val() === auth.uid))",
+                ".validate": "$id.matches(/^m[0-9]+$/) && newData.isString()"
+              }
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     }
   }

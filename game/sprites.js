@@ -199,6 +199,67 @@ export function frameIndex(moving, time) {
     return [1, 0, 2, 0][Math.floor(time * 8) % 4];
 }
 
+// ---------- Mouse ----------
+
+const MOUSE = {
+    palette: { m: "#b8a48e", M: "#94806c", p: "#f4a6b6", P: "#e07f95", w: "#efe6da", e: OUTLINE },
+    down: [
+        ".............",
+        "..ppp...ppp..",
+        "..pPp...pPp..",
+        "..ppmmmmmpp..",
+        "...mmmmmmm...",
+        "...memmmem...",
+        "...mmmpmmm...",
+        "....mwwwm....",
+        "....m...m....",
+        "............."
+    ],
+    up: [
+        ".............",
+        "..ppp...ppp..",
+        "..pPp...pPp..",
+        "..ppmmmmmpp..",
+        "...mmmmmmm...",
+        "...mmMMMmm...",
+        "...mmmmmmm...",
+        "....m.p.m....",
+        "......p......",
+        "............."
+    ],
+    right: [
+        ".............",
+        ".............",
+        ".......ppp...",
+        "....mmmpPpm..",
+        "...mmmmmmmem.",
+        "p.mmmmmmmmmp.",
+        ".pmmmmmmwww..",
+        "...m....m....",
+        ".............",
+        "............."
+    ],
+    walk: {
+        down: [{ 8: "....m........" }, { 8: "........m...." }],
+        up: [{ 7: "....m.p......" }, { 7: "......p.m...." }],
+        right: [{ 7: "..m......m..." }, { 7: "....m..m....." }]
+    }
+};
+
+// { down: [stand, runA, runB], up, right, left } — 13×10 pixels, feet on row 8.
+export function buildMouseSprites() {
+    const frames = {};
+    for (const dir of ["down", "up", "right"]) {
+        frames[dir] = [
+            drawPixels(MOUSE[dir], MOUSE.palette),
+            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][0]), MOUSE.palette),
+            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][1]), MOUSE.palette)
+        ];
+    }
+    frames.left = frames.right.map(mirror);
+    return frames;
+}
+
 // ---------- Scenery ----------
 
 // Small deterministic random generator so every player sees the same meadow.

@@ -9,6 +9,7 @@ export const WORLD_H = 30 * TILE;
 const FEET_W = 10;
 const FEET_H = 5;
 const EDGE = 28; // players can't walk into the forest around the meadow
+const COVER_RADIUS = 17; // standing this close to a bush or a tree hides you from mice
 
 export const SPAWN = {
     cat: { x: WORLD_W / 2 - 20, y: WORLD_H / 2 + 8 },
@@ -28,6 +29,8 @@ export function buildWorld() {
     const rockImgs = [buildRock(6), buildRock(7)];
     const props = []; // drawable things that can hide players: { img, x, y, base }
     const solids = []; // collision rectangles: { x, y, w, h }
+    const covers = []; // bushes and trees you can hide next to: { x, y }
+    const rocks = []; // mice pop out from behind these: { x, y }
 
     const center = { x: WORLD_W / 2, y: WORLD_H / 2 };
     const free = (x, y, r) =>
@@ -39,7 +42,10 @@ export function buildWorld() {
         // (x, y) — the bottom-center of the trunk
         const img = treeImgs[Math.floor(rand() * treeImgs.length)];
         props.push({ img, x: Math.round(x - 16), y: Math.round(y - 39), base: y, cx: x });
-        if (solid) solids.push({ x: x - 5, y: y - 7, w: 10, h: 7 });
+        if (solid) {
+            solids.push({ x: x - 5, y: y - 7, w: 10, h: 7 });
+            covers.push({ x, y: y - 3 });
+        }
     }
 
     // Forest around the meadow: two staggered rows on every side.
@@ -70,16 +76,18 @@ export function buildWorld() {
         const img = bushImgs[Math.floor(rand() * bushImgs.length)];
         props.push({ img, x: Math.round(x - 9), y: Math.round(y - 13), base: y, cx: x });
         solids.push({ x: x - 7, y: y - 6, w: 14, h: 6 });
+        covers.push({ x, y: y - 3 });
     });
     scatter(8, 22, (x, y) => {
         const img = rockImgs[Math.floor(rand() * rockImgs.length)];
         props.push({ img, x: Math.round(x - 7), y: Math.round(y - 10), base: y, cx: x });
         solids.push({ x: x - 5, y: y - 5, w: 10, h: 5 });
+        rocks.push({ x, y });
     });
 
     const ground = renderGround(rand, props);
     props.sort((a, b) => a.base - b.base);
-    return { ground, props, solids };
+    return { ground, props, solids, covers, rocks };
 }
 
 function renderGround(rand, props) {
@@ -148,20 +156,25 @@ function renderGround(rand, props) {
     return canvas;
 }
 
-export function blocked(world, x, y) {
-    const left = x - FEET_W / 2;
-    const top = y - FEET_H;
-    if (left < EDGE || left + FEET_W > WORLD_W - EDGE || top < EDGE + 22 || y > WORLD_H - EDGE) return true;
+// (w, h) — size of the feet box: players by default, mice are smaller.
+export function blocked(world, x, y, w = FEET_W, h = FEET_H) {
+    const left = x - w / 2;
+    const top = y - h;
+    if (left < EDGE || left + w > WORLD_W - EDGE || top < EDGE + 22 || y > WORLD_H - EDGE) return true;
     for (const s of world.solids) {
-        if (left < s.x + s.w && left + FEET_W > s.x && top < s.y + s.h && y > s.y) return true;
+        if (left < s.x + s.w && left + w > s.x && top < s.y + s.h && y > s.y) return true;
     }
-    const corners = [[left, top], [left + FEET_W, top], [left, y], [left + FEET_W, y]];
+    const corners = [[left, top], [left + w, top], [left, y], [left + w, y]];
     return corners.some(([cx, cy]) => inPond(cx, cy, 0.95));
 }
 
 // Moves (x, y) by (dx, dy), sliding along obstacles.
-export function moveWithCollisions(world, x, y, dx, dy) {
-    if (dx && !blocked(world, x + dx, y)) x += dx;
-    if (dy && !blocked(world, x, y + dy)) y += dy;
+export function moveWithCollisions(world, x, y, dx, dy, w, h) {
+    if (dx && !blocked(world, x + dx, y, w, h)) x += dx;
+    if (dy && !blocked(world, x, y + dy, w, h)) y += dy;
     return { x, y };
+}
+
+export function inCover(world, x, y) {
+    return world.covers.some((c) => Math.hypot(c.x - x, c.y - y) < COVER_RADIUS);
 }
