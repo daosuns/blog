@@ -38,6 +38,8 @@ const other = (role) => (role === "cat" ? "fox" : "cat");
 const SPEED = 64; // world pixels per second
 const SEND_EVERY = 100; // ms between position updates
 const JOY_RADIUS = 46; // CSS px
+const HIDE_TIME = 0.2; // seconds you have to stand still next to a bush or a tree to hide
+const ACC = { cat: "Кота", fox: "Лиса" };
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -267,7 +269,8 @@ function startGame() {
     const canvas = $("stage");
     const ctx = canvas.getContext("2d");
     const world = buildWorld();
-    const mouseSprites = buildMouseSprites();
+    const normalSprites = buildMouseSprites();
+    const zombieSprites = buildMouseSprites(true);
     const base = "rooms/" + code;
     const posRef = myRole && ref(db, base + "/pos/" + myRole);
     const mouseRef = ref(db, base + "/game/mouse");
@@ -283,12 +286,13 @@ function startGame() {
         chars[role] = { role, x: p.x, y: p.y, tx: p.x, ty: p.y, d: p.d || "down", m: false, h: false, t: 0 };
     }
 
-    // Hiding: standing next to a bush or a tree, plus a few seconds after stepping out.
+    // Hiding: standing still next to a bush or a tree, plus a few seconds after stepping out.
     let myCover = false;
+    let coverStill = 0; // seconds spent standing still next to cover
     let lastCover = -Infinity; // performance.now() of the last moment in cover
 
     // The mouse as this device shows it.
-    const mouse = { id: 0, x: 0, y: 0, tx: 0, ty: 0, d: "down", s: "gone", since: 0, t: 0 };
+    const mouse = { id: 0, x: 0, y: 0, tx: 0, ty: 0, d: "down", s: "gone", z: false, since: 0, t: 0 };
     let sim = null; // MouseSim when this device runs the mouse
     let simSent = "";
     let simLastSent = 0;
@@ -297,6 +301,7 @@ function startGame() {
     const effects = []; // catch puffs and "+1" texts
     let round = -1;
     let knownCatches = null;
+    let knownZaps = null;
     let oldMice = 0; // mice from before the current round can't be caught any more
 
     const keys = new Set();
@@ -312,9 +317,14 @@ function startGame() {
     // ----- game data helpers -----
     const gameData = () => room.game || {};
     const catchesOf = (r) => (gameData().catches || {})[r] || {};
+    const zapsOf = (r) => (gameData().zaps || {})[r] || {}; // zombie mice that caught a player
+    const idOf = (key) => Number(key.slice(1));
     function score() {
+        // A zombie mouse resets its victim's score: only mice caught after it count.
+        const since = { cat: 0, fox: 0 };
+        for (const [key, role] of Object.entries(zapsOf(round))) if (role in since) since[role] = Math.max(since[role], idOf(key));
         const s = { cat: 0, fox: 0 };
-        for (const role of Object.values(catchesOf(round))) if (role in s) s[role] += 1;
+        for (const [key, role] of Object.entries(catchesOf(round))) if (role in s && idOf(key) > since[role]) s[role] += 1;
         return s;
     }
     function winner() {
@@ -372,10 +382,14 @@ function startGame() {
     }
 
     // ----- mouse display -----
-    function showMouseState(s, id) {
+    function showMouseState(s, id, z) {
+        mouse.z = z;
         if (id !== mouse.id) {
             mouse.id = id;
-            if (s === "out" || s === "graze" || s === "eat") showToast("З'явилась мишка! 🐭", 1800);
+            if (s === "out" || s === "graze" || s === "eat") {
+                if (z) showToast("Обережно: зомбі-мишка! 🧟 Ховайся біля кущів!", 2600);
+                else showToast("З'явилась мишка! 🐭", 1800);
+            }
         }
         if (s === mouse.s) return;
         if (s === "gone" && mouse.s === "burrow") mound = { x: mouse.x, y: mouse.y, at: performance.now() };
@@ -391,6 +405,15 @@ function startGame() {
         }
         if (role === myRole) showToast("Ти спіймав мишку! +1", 1800);
         else showToast(NAME[role] + " спіймав мишку!", 1800);
+    }
+
+    function onZap(id, role) {
+        if (id === mouse.id) {
+            effects.push({ x: mouse.x, y: mouse.y - 4, at: performance.now(), role, zap: true });
+            mouse.s = "gone";
+        }
+        if (role === myRole) showToast("Зомбі-мишка тебе спіймала! Твій рахунок — 0 😱", 2600);
+        else showToast("Зомбі-мишка спіймала " + ACC[role] + "! Його рахунок — 0", 2600);
     }
 
     // ----- network -----
@@ -417,15 +440,22 @@ function startGame() {
             oldMice = mouse.id;
             claimed.clear();
             knownCatches = null;
+            knownZaps = null;
             if (sim) sim.reset(serverNow());
         }
 
         // Catches that happened since the last update.
         const caught = catchesOf(round);
         if (knownCatches) {
-            for (const key of Object.keys(caught)) if (!(key in knownCatches)) onCatch(Number(key.slice(1)), caught[key]);
+            for (const key of Object.keys(caught)) if (!(key in knownCatches)) onCatch(idOf(key), caught[key]);
         }
         knownCatches = { ...caught };
+        const zapped = zapsOf(round);
+        if (knownZaps) {
+            for (const key of Object.keys(zapped)) if (!(key in knownZaps)) onZap(idOf(key), zapped[key]);
+        }
+        knownZaps = { ...zapped };
+        const finished = (id) => Boolean(caught["m" + id] || zapped["m" + id]);
 
         // Who runs the mouse.
         const amSim = myRole && simulatorRole() === myRole;
@@ -435,7 +465,7 @@ function startGame() {
         } else if (!amSim && sim) {
             sim = null;
         }
-        if (sim && caught["m" + sim.m.id] && ALIVE.has(sim.m.s)) sim.caught(serverNow());
+        if (sim && finished(sim.m.id) && ALIVE.has(sim.m.s)) sim.caught(serverNow());
 
         // Mouse from the network (when another device runs it).
         const nm = gameData().mouse;
@@ -447,7 +477,7 @@ function startGame() {
             mouse.tx = nm.x;
             mouse.ty = nm.y;
             mouse.d = nm.d;
-            showMouseState(caught["m" + nm.id] ? "gone" : nm.s, nm.id);
+            showMouseState(finished(nm.id) ? "gone" : nm.s, nm.id, Boolean(nm.z));
         }
 
         // HUD
@@ -524,7 +554,15 @@ function startGame() {
                     $("touch-hint").classList.add("gone");
                 }
             }
-            myCover = inCover(world, me.x, me.y);
+            // Hiding takes a moment: stand still next to cover. Running past a bush doesn't count.
+            const nearCover = inCover(world, me.x, me.y);
+            if (!nearCover) {
+                myCover = false;
+                coverStill = 0;
+            } else if (!myCover) {
+                coverStill = me.m ? 0 : coverStill + dt;
+                if (coverStill >= HIDE_TIME) myCover = true;
+            }
             if (myCover) lastCover = now;
             myHidden = now - lastCover < AMBUSH_MS;
             me.h = myHidden;
@@ -535,7 +573,10 @@ function startGame() {
                 hintShown = false;
                 $("touch-hint").classList.add("gone");
             }
-            if (myCover) {
+            if (nearCover && !myCover) {
+                stealth.textContent = "🌿 Зупинись, щоб сховатися";
+                stealth.hidden = false;
+            } else if (myCover) {
                 stealth.textContent = "🌿 Ти в укритті — мишка тебе не бачить";
                 stealth.hidden = false;
             } else if (myHidden) {
@@ -563,20 +604,23 @@ function startGame() {
             mouse.x = sim.m.x;
             mouse.y = sim.m.y;
             mouse.d = sim.m.d;
-            showMouseState(sim.m.s, sim.m.id);
+            showMouseState(sim.m.s, sim.m.id, sim.m.z);
             sendMouse(now);
         } else {
             follow(mouse, dt, 40);
         }
         mouse.t += dt;
 
-        // Catching: just bump into the mouse.
+        // Catching: just bump into the mouse. A zombie mouse bumping into you catches *you* —
+        // unless you're hidden. Each player checks this on their own device, where hiding is exact.
         if (myRole && ALIVE.has(mouse.s) && mouse.id > oldMice && !winner() && !claimed.has(mouse.id)) {
             const me = chars[myRole];
-            if (Math.hypot(me.x - mouse.x, me.y - mouse.y) < CATCH_DIST) {
+            const touching = Math.hypot(me.x - mouse.x, me.y - mouse.y) < CATCH_DIST;
+            if (touching && (!mouse.z || !myHidden)) {
                 const id = mouse.id;
                 claimed.add(id);
-                runTransaction(ref(db, base + "/game/catches/" + round + "/m" + id), (cur) => (cur === null ? myRole : undefined))
+                const list = mouse.z ? "/game/zaps/" : "/game/catches/";
+                runTransaction(ref(db, base + list + round + "/m" + id), (cur) => (cur === null ? myRole : undefined))
                     .catch(console.error);
             }
         }
@@ -599,6 +643,7 @@ function startGame() {
 
     // ----- rendering -----
     function drawMouse(now) {
+        const mouseSprites = mouse.z ? zombieSprites : normalSprites;
         const x = Math.round(mouse.x);
         const y = Math.round(mouse.y);
         const dir = mouse.d || "down";
@@ -625,12 +670,13 @@ function startGame() {
         if (mouse.s === "eat") bob = Math.floor(now / 220) % 2;
         if (mouse.s === "graze" || mouse.s === "out") frame = frameIndex(true, mouse.t);
         if (mouse.s === "flee") frame = frameIndex(true, mouse.t * 2);
+        if (mouse.s === "hunt") frame = frameIndex(true, mouse.t * 1.5);
         ctx.drawImage(mouseSprites[dir][frame], x - 6, y - 8 + bob);
-        if (mouse.s === "flee" && now - mouse.since < 900 && Math.floor(now / 120) % 2 === 0) {
-            // "!" — the mouse noticed someone
+        if ((mouse.s === "flee" || mouse.s === "hunt") && now - mouse.since < 900 && Math.floor(now / 120) % 2 === 0) {
+            // "!" — the mouse noticed someone (red: a zombie mouse goes hunting)
             ctx.fillStyle = OUTLINE;
             ctx.fillRect(x - 1, y - 19, 3, 8);
-            ctx.fillStyle = "#ffffff";
+            ctx.fillStyle = mouse.s === "hunt" ? "#ff3030" : "#ffffff";
             ctx.fillRect(x, y - 18, 1, 4);
             ctx.fillRect(x, y - 13, 1, 1);
         }
@@ -729,7 +775,7 @@ function startGame() {
             const age = (now - e.at) / 1000;
             if (age > 1.2) { effects.splice(i, 1); continue; }
             if (age < 0.5) {
-                ctx.fillStyle = "#ffffff";
+                ctx.fillStyle = e.zap ? "#ff3030" : "#ffffff";
                 for (let k = 0; k < 8; k++) {
                     const a = (k / 8) * Math.PI * 2;
                     const r = 3 + age * 22;
@@ -776,9 +822,10 @@ function startGame() {
             const age = (now - e.at) / 1000;
             const p = toScreen(e.x, e.y);
             ctx.globalAlpha = Math.max(0, 1 - age / 1.2);
-            ctx.strokeText("+1", p.x, p.y - 18 - age * 30);
-            ctx.fillStyle = e.role === "fox" ? "#ffb072" : "#e3e6f0";
-            ctx.fillText("+1", p.x, p.y - 18 - age * 30);
+            const label = e.zap ? "0!" : "+1";
+            ctx.strokeText(label, p.x, p.y - 18 - age * 30);
+            ctx.fillStyle = e.zap ? "#ff4a4a" : e.role === "fox" ? "#ffb072" : "#e3e6f0";
+            ctx.fillText(label, p.x, p.y - 18 - age * 30);
         }
         ctx.globalAlpha = 1;
 
@@ -801,9 +848,9 @@ function startGame() {
                 const px = cx + dx * t;
                 const py = cy + dy * t;
                 const r = 16;
-                // pointer
+                // pointer (red-rimmed for a zombie mouse)
                 ctx.fillStyle = "#ffffff";
-                ctx.strokeStyle = OUTLINE;
+                ctx.strokeStyle = mouse.z ? "#d42020" : OUTLINE;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(px + dx * (r + 10), py + dy * (r + 10));
@@ -818,7 +865,7 @@ function startGame() {
                 ctx.fill();
                 ctx.stroke();
                 ctx.imageSmoothingEnabled = false;
-                ctx.drawImage(mouseSprites.down[0], 0, 0, 13, 9, px - 13, py - 10, 26, 18);
+                ctx.drawImage((mouse.z ? zombieSprites : normalSprites).down[0], 0, 0, 13, 9, px - 13, py - 10, 26, 18);
             }
         }
 
@@ -854,9 +901,11 @@ function startGame() {
     if (TESTING) {
         // Hooks for automated tests only.
         window.__game = {
-            chars, mouse,
+            chars, mouse, world,
             get sim() { return sim; },
             teleport(x, y) { Object.assign(chars[myRole], { x, y }); },
+            get hidden() { return chars[myRole].h; },
+            get cover() { return myCover; },
             ambush() { lastCover = performance.now(); }
         };
     }

@@ -14,6 +14,10 @@ const OUT_SPEED = 30;
 const CALM_AFTER = 1.8; // seconds without seeing anyone before the mouse calms down
 const BURROW_TIME = 0.8;
 const MAX_CHASE = 6; // chased this long, the mouse gives up running and digs in
+const ZOMBIE_CHANCE = 0.15;
+const ZOMBIE_SPEED = 84; // faster than the cat and the fox: you can't just run away, you have to hide
+const ZOMBIE_VISION = 160;
+const ZOMBIE_LIFE = 10; // seconds; a zombie mouse that caught nobody digs back in
 const BOX_W = 6;
 const BOX_H = 3;
 
@@ -22,9 +26,11 @@ const BOX_H = 3;
 //   graze  – walking around calmly
 //   eat    – standing still, nibbling
 //   flee   – saw a cat or a fox and runs away
+//   hunt   – a zombie mouse runs at a cat or a fox it can see
 //   burrow – nowhere left to run, digging into the ground
 //   gone   – no mouse right now; a new one appears at `next` (server time, ms)
-export const ALIVE = new Set(["out", "graze", "eat", "flee"]);
+// `z: true` marks a zombie mouse: black with red eyes, it hunts the players instead of fleeing.
+export const ALIVE = new Set(["out", "graze", "eat", "flee", "hunt"]);
 
 const dirOf = (dx, dy) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
 const free = (world, x, y) => !blocked(world, x, y, BOX_W, BOX_H);
@@ -32,7 +38,8 @@ const free = (world, x, y) => !blocked(world, x, y, BOX_W, BOX_H);
 export class MouseSim {
     constructor(world, state) {
         this.world = world;
-        this.m = { id: 0, x: 0, y: 0, d: "down", s: "gone", next: 0, ...state };
+        this.m = { id: 0, x: 0, y: 0, d: "down", s: "gone", next: 0, z: false, ...state };
+        this.life = 0; // seconds since a zombie mouse appeared
         this.timer = 0; // seconds spent in the current state / sub-step
         this.goal = null; // { x, y } for "out"
         this.heading = { x: 0, y: 0 };
@@ -44,11 +51,11 @@ export class MouseSim {
     }
 
     state() {
-        const { id, x, y, d, s, next } = this.m;
-        return { id, x: Math.round(x), y: Math.round(y), d, s, next: Math.round(next) };
+        const { id, x, y, d, s, next, z } = this.m;
+        return { id, x: Math.round(x), y: Math.round(y), d, s, next: Math.round(next), z: Boolean(z) };
     }
 
-    // The mouse was caught: remove it and schedule the next one.
+    // The mouse was caught (or a zombie mouse caught someone): remove it and schedule the next one.
     caught(now) {
         this.set("gone");
         this.m.next = now + 2500 + Math.random() * 2500;
@@ -86,6 +93,10 @@ export class MouseSim {
             }
             return;
         }
+        if (m.z) {
+            this.zombieStep(dt, players);
+            return;
+        }
 
         const threat = this.nearestThreat(players);
         if (threat) {
@@ -104,7 +115,12 @@ export class MouseSim {
             }
             this.set("eat");
         }
+        this.calmStep(dt);
+    }
 
+    // Popping out, nibbling and wandering around — when nobody bothers the mouse.
+    calmStep(dt) {
+        const m = this.m;
         if (m.s === "out") {
             const dx = this.goal.x - m.x;
             const dy = this.goal.y - m.y;
@@ -129,6 +145,48 @@ export class MouseSim {
         }
     }
 
+    // A zombie mouse runs straight at the nearest cat or fox it can see.
+    // Hidden players are invisible to it, so hiding mid-chase makes it lose them.
+    zombieStep(dt, players) {
+        const m = this.m;
+        this.life += dt;
+        if (this.life > ZOMBIE_LIFE) {
+            this.set("burrow");
+            return;
+        }
+        const target = m.s === "out" ? null : this.nearestThreat(players, ZOMBIE_VISION);
+        if (target) {
+            if (m.s !== "hunt") this.set("hunt");
+            this.chase(dt, target);
+            return;
+        }
+        if (m.s === "hunt") {
+            // Lost sight of its prey: stops and looks around.
+            this.set("eat");
+            this.pause = 0.8;
+            return;
+        }
+        this.calmStep(dt);
+    }
+
+    chase(dt, target) {
+        const m = this.m;
+        let ax = target.x - m.x;
+        let ay = target.y - m.y;
+        const len = Math.hypot(ax, ay) || 1;
+        ax /= len;
+        ay /= len;
+        for (const deg of [0, 30, -30, 60, -60, 90, -90]) {
+            const r = (deg * Math.PI) / 180;
+            const hx = ax * Math.cos(r) - ay * Math.sin(r);
+            const hy = ax * Math.sin(r) + ay * Math.cos(r);
+            if (free(this.world, m.x + hx * 8, m.y + hy * 8)) {
+                this.run(dt, hx, hy, ZOMBIE_SPEED);
+                return;
+            }
+        }
+    }
+
     startWandering() {
         const m = this.m;
         for (let i = 0; i < 8; i++) {
@@ -146,9 +204,9 @@ export class MouseSim {
         this.pause = 1;
     }
 
-    nearestThreat(players) {
+    nearestThreat(players, range = VISION) {
         let best = null;
-        let bestDist = VISION;
+        let bestDist = range;
         for (const p of players) {
             if (p.hidden) continue;
             const dist = Math.hypot(p.x - this.m.x, p.y - this.m.y);
@@ -221,6 +279,8 @@ export class MouseSim {
     place(start, goal) {
         const m = this.m;
         m.id += 1;
+        m.z = Math.random() < ZOMBIE_CHANCE;
+        this.life = 0;
         m.x = start.x;
         m.y = start.y;
         m.d = dirOf(goal.x - start.x, goal.y - start.y || 1);

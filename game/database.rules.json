@@ -68,13 +68,24 @@
               ".validate": "newData.isString() && newData.val().matches(/^(up|down|left|right)$/)"
             },
             "s": {
-              ".validate": "newData.isString() && newData.val().matches(/^(out|graze|eat|flee|burrow|gone)$/)"
+              ".validate": "newData.isString() && newData.val().matches(/^(out|graze|eat|flee|hunt|burrow|gone)$/)"
+            },
+            "z": {
+              ".validate": "newData.isBoolean()"
             },
             "$other": {
               ".validate": false
             }
           },
           "catches": {
+            "$round": {
+              "$id": {
+                ".write": "auth != null && !data.exists() && ((newData.val() === 'cat' && root.child('rooms').child($code).child('players/cat').val() === auth.uid) || (newData.val() === 'fox' && root.child('rooms').child($code).child('players/fox').val() === auth.uid))",
+                ".validate": "$id.matches(/^m[0-9]+$/) && newData.isString()"
+              }
+            }
+          },
+          "zaps": {
             "$round": {
               "$id": {
                 ".write": "auth != null && !data.exists() && ((newData.val() === 'cat' && root.child('rooms').child($code).child('players/cat').val() === auth.uid) || (newData.val() === 'fox' && root.child('rooms').child($code).child('players/fox').val() === auth.uid))",

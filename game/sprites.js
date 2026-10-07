@@ -246,14 +246,18 @@ const MOUSE = {
     }
 };
 
+// The zombie mouse: same shape, black fur and glowing red eyes.
+const ZOMBIE_PALETTE = { m: "#423c4c", M: "#2f2a37", p: "#5e4a58", P: "#9b2f3f", w: "#5f5868", e: "#ff3030" };
+
 // { down: [stand, runA, runB], up, right, left } — 13×10 pixels, feet on row 8.
-export function buildMouseSprites() {
+export function buildMouseSprites(zombie = false) {
+    const palette = zombie ? ZOMBIE_PALETTE : MOUSE.palette;
     const frames = {};
     for (const dir of ["down", "up", "right"]) {
         frames[dir] = [
-            drawPixels(MOUSE[dir], MOUSE.palette),
-            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][0]), MOUSE.palette),
-            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][1]), MOUSE.palette)
+            drawPixels(MOUSE[dir], palette),
+            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][0]), palette),
+            drawPixels(withRows(MOUSE[dir], MOUSE.walk[dir][1]), palette)
         ];
     }
     frames.left = frames.right.map(mirror);
