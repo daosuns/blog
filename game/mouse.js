@@ -14,7 +14,7 @@ const OUT_SPEED = 30;
 const CALM_AFTER = 1.8; // seconds without seeing anyone before the mouse calms down
 const BURROW_TIME = 0.8;
 const MAX_CHASE = 6; // chased this long, the mouse gives up running and digs in
-const ZOMBIE_CHANCE = 0.15;
+const ZOMBIE_CHANCE = 0.2;
 const ZOMBIE_SPEED = 84; // faster than the cat and the fox: you can't just run away, you have to hide
 const ZOMBIE_VISION = 160;
 const ZOMBIE_LIFE = 10; // seconds; a zombie mouse that caught nobody digs back in
@@ -59,6 +59,11 @@ export class MouseSim {
     caught(now) {
         this.set("gone");
         this.m.next = now + 2500 + Math.random() * 2500;
+    }
+
+    // A zombie mouse bit someone: happy, it digs back into its burrow.
+    digIn() {
+        this.set("burrow");
     }
 
     // A new round starts: clear the meadow, first mouse soon.

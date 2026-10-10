@@ -64,17 +64,8 @@
             "next": {
               ".validate": "newData.isNumber()"
             },
-            "d": {
-              ".validate": "newData.isString() && newData.val().matches(/^(up|down|left|right)$/)"
-            },
             "s": {
-              ".validate": "newData.isString() && newData.val().matches(/^(out|graze|eat|flee|hunt|burrow|gone)$/)"
-            },
-            "z": {
-              ".validate": "newData.isBoolean()"
-            },
-            "$other": {
-              ".validate": false
+              ".validate": "newData.isString()"
             }
           },
           "catches": {

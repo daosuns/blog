@@ -254,6 +254,18 @@ function headIcon(role) {
     return c.toDataURL();
 }
 
+// The database refused a write — almost always rules in Firebase that are older than the game.
+let lastWriteWarning = 0;
+let dbRefused = false; // keeps a warning in the HUD
+function reportWriteError(err) {
+    console.error(err);
+    if (!/permission/i.test(String(err && (err.code || err.message)))) return;
+    dbRefused = true;
+    if (Date.now() - lastWriteWarning < 15000) return;
+    lastWriteWarning = Date.now();
+    showToast("⚠️ База не приймає дані гри, тож друг може не бачити мишку. Онови правила (Rules) у Firebase.", 9000);
+}
+
 let toastTimer = null;
 function showToast(text, ms = 2200) {
     const el = $("toast");
@@ -410,10 +422,14 @@ function startGame() {
     function onZap(id, role) {
         if (id === mouse.id) {
             effects.push({ x: mouse.x, y: mouse.y - 4, at: performance.now(), role, zap: true });
-            mouse.s = "gone";
+            // Bit someone and is happy: digs back into its burrow.
+            if (ALIVE.has(mouse.s)) {
+                mouse.s = "burrow";
+                mouse.since = performance.now();
+            }
         }
-        if (role === myRole) showToast("Зомбі-мишка тебе спіймала! Твій рахунок — 0 😱", 2600);
-        else showToast("Зомбі-мишка спіймала " + ACC[role] + "! Його рахунок — 0", 2600);
+        if (role === myRole) showToast("Зомбі-мишка тебе вкусила! Твій рахунок — 0 😱", 2600);
+        else showToast("Зомбі-мишка вкусила " + ACC[role] + "! Його рахунок — 0", 2600);
     }
 
     // ----- network -----
@@ -455,7 +471,6 @@ function startGame() {
             for (const key of Object.keys(zapped)) if (!(key in knownZaps)) onZap(idOf(key), zapped[key]);
         }
         knownZaps = { ...zapped };
-        const finished = (id) => Boolean(caught["m" + id] || zapped["m" + id]);
 
         // Who runs the mouse.
         const amSim = myRole && simulatorRole() === myRole;
@@ -465,7 +480,10 @@ function startGame() {
         } else if (!amSim && sim) {
             sim = null;
         }
-        if (sim && finished(sim.m.id) && ALIVE.has(sim.m.s)) sim.caught(serverNow());
+        if (sim && ALIVE.has(sim.m.s)) {
+            if (caught["m" + sim.m.id]) sim.caught(serverNow());
+            else if (zapped["m" + sim.m.id]) sim.digIn();
+        }
 
         // Mouse from the network (when another device runs it).
         const nm = gameData().mouse;
@@ -477,7 +495,10 @@ function startGame() {
             mouse.tx = nm.x;
             mouse.ty = nm.y;
             mouse.d = nm.d;
-            showMouseState(finished(nm.id) ? "gone" : nm.s, nm.id, Boolean(nm.z));
+            let s = nm.s;
+            if (caught["m" + nm.id]) s = "gone";
+            else if (zapped["m" + nm.id] && ALIVE.has(s)) s = "burrow"; // bit someone, digs in
+            showMouseState(s, nm.id, Boolean(nm.z));
         }
 
         // HUD
@@ -485,7 +506,10 @@ function startGame() {
         $("score-cat").textContent = s.cat;
         $("score-fox").textContent = s.fox;
         const status = $("hud-status");
-        if (myRole && !online[other(myRole)]) {
+        if (dbRefused) {
+            status.textContent = "⚠️ Онови правила у Firebase";
+            status.hidden = false;
+        } else if (myRole && !online[other(myRole)]) {
             status.textContent = NAME[other(myRole)] + " не в мережі";
             status.hidden = false;
         } else if (!myRole) {
@@ -517,7 +541,7 @@ function startGame() {
         if (!changedFlags && now - lastSent < SEND_EVERY) return;
         sentState = key;
         lastSent = now;
-        set(posRef, state).catch(console.error);
+        set(posRef, state).catch(reportWriteError);
     }
 
     function sendMouse(now) {
@@ -528,7 +552,7 @@ function startGame() {
         if (!stateChanged && now - simLastSent < SEND_EVERY) return;
         simSent = key;
         simLastSent = now;
-        set(mouseRef, st).catch(console.error);
+        set(mouseRef, st).catch(reportWriteError);
     }
 
     // ----- simulation -----
@@ -621,7 +645,7 @@ function startGame() {
                 claimed.add(id);
                 const list = mouse.z ? "/game/zaps/" : "/game/catches/";
                 runTransaction(ref(db, base + list + round + "/m" + id), (cur) => (cur === null ? myRole : undefined))
-                    .catch(console.error);
+                    .catch(reportWriteError);
             }
         }
 
@@ -774,7 +798,7 @@ function startGame() {
             const e = effects[i];
             const age = (now - e.at) / 1000;
             if (age > 1.2) { effects.splice(i, 1); continue; }
-            if (age < 0.5) {
+            if (age < 0.5 && !e.zap) {
                 ctx.fillStyle = e.zap ? "#ff3030" : "#ffffff";
                 for (let k = 0; k < 8; k++) {
                     const a = (k / 8) * Math.PI * 2;
